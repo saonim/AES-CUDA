@@ -1,8 +1,11 @@
-// NUCAR, 2014
+//
+//  CasAES128_CUDA.c
+//  CasAES128_CUDA
+//  Created by Carter McCardwell on 11/11/14.
+//
 
 #include <stdint.h>
 #include <stdio.h>
-#include <pthread.h>
 #include <time.h>
 #include <string.h>
 
@@ -11,10 +14,6 @@
 const int Nb_h = 4;
 const int Nr_h = 10;
 const int Nk_h = 4;
-
-const int RUNNING_THREADS = 2;
-//Change this variable to adjust the number of CUDA threads that run at the same time
-//Note: memory usage drastically increases with the number of threads
 
 const uint8_t s_h[256]=
 {
@@ -55,13 +54,7 @@ uint8_t Rcon_h[256] = {
 		0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d
 };
 
-struct ThreadControl {
-	int id;
-	uint8_t* state[16];
-};
-
 __constant__ uint8_t s[256];
-__constant__ uint8_t Rcon[256];
 __constant__ int Nb;
 __constant__ int Nr;
 __constant__ int Nk;
@@ -77,7 +70,7 @@ inline void cudaDevAssist(cudaError_t code, int line, bool abort=true)
 	}
 }
 
-__device__ uint32_t sw(uint32_t word)
+uint32_t sw(uint32_t word)
 {
 	union {
 		uint32_t word;
@@ -85,10 +78,10 @@ __device__ uint32_t sw(uint32_t word)
 	} subWord  __attribute__ ((aligned));
 	subWord.word = word;
 
-	subWord.bytes[3] = s[subWord.bytes[3]];
-	subWord.bytes[2] = s[subWord.bytes[2]];
-	subWord.bytes[1] = s[subWord.bytes[1]];
-	subWord.bytes[0] = s[subWord.bytes[0]];
+	subWord.bytes[3] = s_h[subWord.bytes[3]];
+	subWord.bytes[2] = s_h[subWord.bytes[2]];
+	subWord.bytes[1] = s_h[subWord.bytes[1]];
+	subWord.bytes[0] = s_h[subWord.bytes[0]];
 
 	return subWord.word;
 }
@@ -151,7 +144,7 @@ __device__ void sr(uint8_t* arr)
 	}
 }
 
-__device__ uint32_t rw(uint32_t word)
+uint32_t rw(uint32_t word)
 {
 	union {
 		uint8_t bytes[4];
@@ -168,56 +161,57 @@ __device__ uint32_t rw(uint32_t word)
 	return subWord.word;
 }
 
-__global__ void K_Exp(uint8_t* pk, uint32_t* out)
-{
-	int i = 0;
-	union {
-		uint8_t bytes[4];
-		uint32_t word;
-	} temp __attribute__ ((aligned));
-	union {
-		uint8_t bytes[4];
-		uint32_t word;
-	} univar[44] __attribute__ ((aligned));
+	void K_Exp(uint8_t* pk, uint32_t* out)
+	{
+		int i = 0;
+		union {
+			uint8_t bytes[4];
+			uint32_t word;
+		} temp __attribute__ ((aligned));
+		union {
+			uint8_t bytes[4];
+			uint32_t word;
+		} univar[44] __attribute__ ((aligned));
 
-	for (i = 0; i < Nk; i++)
-	{
-		univar[i].bytes[3] = pk[i*4];
-		univar[i].bytes[2] = pk[i*4+1];
-		univar[i].bytes[1] = pk[i*4+2];
-		univar[i].bytes[0] = pk[i*4+3];
+		for (i = 0; i < Nk_h; i++)
+		{
+			univar[i].bytes[3] = pk[i*4];
+			univar[i].bytes[2] = pk[i*4+1];
+			univar[i].bytes[1] = pk[i*4+2];
+			univar[i].bytes[0] = pk[i*4+3];
+		}
+
+		for (i = Nk_h; i < Nb_h*(Nr_h+1); i++)
+		{
+			temp.word = univar[i-1].word;
+			if (i % Nk_h == 0)
+			{
+				temp.word = (sw(rw(temp.word)));
+				temp.bytes[3] = temp.bytes[3] ^ (Rcon_h[i/Nk_h]);
+			}
+			else if (Nk_h > 6 && i % Nk_h == 4)
+			{
+				temp.word = sw(temp.word);
+			}
+			if (i-4 % Nk_h == 0)
+			{
+				temp.word = sw(temp.word);
+			}
+			univar[i].word = univar[i-Nk_h].word ^ temp.word;
+		}
+		for (i = 0; i < 44; i++)
+		{
+			out[i] = univar[i].word;
+		}
 	}
 
-	for (i = Nk; i < Nb*(Nr+1); i++)
-	{
-		temp.word = univar[i-1].word;
-		if (i % Nk == 0)
-		{
-			temp.word = (sw(rw(temp.word)));
-			temp.bytes[3] = temp.bytes[3] ^ (Rcon[i/Nk]);
-		}
-		else if (Nk > 6 && i % Nk == 4)
-		{
-			temp.word = sw(temp.word);
-		}
-		if (i-4 % Nk == 0)
-		{
-			temp.word = sw(temp.word);
-		}
-		univar[i].word = univar[i-Nk].word ^ temp.word;
-	}
-	for (i = 0; i < 44; i++)
-	{
-		out[i] = univar[i].word;
-	}
-}
 
 __device__ void ark(uint8_t* state, int strD)
 {
     union {
-		uint32_t word;
-		uint8_t bytes[4];
-	} zero __attribute__ ((aligned));
+	    	uint32_t word;
+	    	uint8_t bytes[4];
+	  } zero __attribute__ ((aligned));
     union {
         uint32_t word;
         uint8_t bytes[4];
@@ -231,10 +225,10 @@ __device__ void ark(uint8_t* state, int strD)
         uint8_t bytes[4];
     } three __attribute__ ((aligned));
 
-	zero.word = ek[strD];
-	one.word = ek[strD+1];
-	two.word = ek[strD+2];
-	three.word = ek[strD+3];
+	  zero.word = ek[strD];
+	  one.word = ek[strD+1];
+	  two.word = ek[strD+2];
+	  three.word = ek[strD+3];
 
     state[0] = state[0] ^ zero.bytes[3];
     state[4] = state[4] ^ zero.bytes[2];
@@ -258,46 +252,32 @@ __device__ void ark(uint8_t* state, int strD)
 
 }
 
-__global__ void cudaRunner(uint8_t *state)
+__global__ void cudaRunner(uint8_t *in)
 {
-    uint8_t lstate[16];
-    for (int i = 0; i < 16; i++) { lstate[i] = state[i]; }
+	uint8_t state[16];
+  int localid = blockDim.x * blockIdx.x + threadIdx.x; //Data is shifted by 16 * ID of worker
+  for (int i = 0; i < 16; i++) { state[i] = in[(localid*16)+i]; }
 
-	ark(lstate, 0);
+	ark(state, 0);
 	for (int i = 1; i < Nr; i++)
 	{
-		sb(lstate);
-		sr(lstate);
-		mc(lstate);
-		ark(lstate, i*Nb);
+		sb(state);
+		sr(state);
+		mc(state);
+		ark(state, i*Nb);
 	}
 
-	sb(lstate);
-	sr(lstate);
-	ark(lstate, Nr*Nb);
-    for (int i = 0; i < 16; i++) { state[i] = lstate[i]; }
-}
+	sb(state);
+	sr(state);
+	ark(state, Nr*Nb);
 
-void* mainCypher(void *tcp)
-{
-	struct ThreadControl *tc = (struct ThreadControl *)tcp;
-
-	uint8_t *devState = NULL;
-
-	cudaDevAssist(cudaMalloc((void**)&devState, 16*sizeof(uint8_t)), 266, true);
-	cudaDevAssist(cudaMemcpy(devState, *tc->state, 16*sizeof(uint8_t), cudaMemcpyHostToDevice), 267, true);
-	cudaDevAssist(cudaDeviceSynchronize(), 268, true);
-	cudaRunner<<<1,1>>>(devState);
-	cudaDevAssist(cudaDeviceSynchronize(), 270, true);
-	cudaDevAssist(cudaMemcpy(*tc->state, devState, 16*sizeof(uint8_t), cudaMemcpyDeviceToHost), 271, true);
-
-	cudaDeviceSynchronize();
-	cudaFree(devState);
-	return NULL;
+	for (int i = 0; i < 16; i++) { in[(localid*16)+i] = state[i]; }
 }
 
 int main(int argc, const char * argv[])
 {
+	printf("CasAES_CUDA Hyperthreaded AES-128 Encryption for CUDA processors - compiled 3/25/2015 Rev. 4\nCarter McCardwell, Northeastern University NUCAR - http://coe.neu.edu/~cmccardw - mccardwell.net\nPlease Wait...\n");
+
 	clock_t c_start, c_stop;
 	c_start = clock();
 
@@ -319,44 +299,32 @@ int main(int argc, const char * argv[])
 	else { printf("error: first argument must be \'a\' for ASCII interpretation or \'h\' for hex interpretation\n"); return(1); }
 
 	uint8_t key[16];
-	uint32_t eK[44];
-	uint32_t *dev_ek;
-	uint8_t *dev_pkey;
+	uint32_t ek_h[44];
 
 	for (int i = 0; i < 16; i++)
 	{
 		fscanf(keyfile, "%x", &key[i]);
 	}
 
+	K_Exp(key, ek_h);
+
 	//send constants to GPU
 	cudaSetDevice(0);
-	cudaDevAssist(cudaMemcpyToSymbol(Nk, &Nk_h, sizeof(int)), 535, true);
-	cudaDevAssist(cudaMemcpyToSymbol(Nr, &Nr_h, sizeof(int)), 543, true);
-	cudaDevAssist(cudaMemcpyToSymbol(Nb, &Nb_h, sizeof(int)), 903, true);
-	cudaDevAssist(cudaMemcpyToSymbol(Rcon, &Rcon_h, 256*sizeof(uint8_t)), 534, true);
-    cudaDeviceSynchronize();
-	cudaDevAssist(cudaMemcpyToSymbol(s, &s_h, 256*sizeof(uint8_t)), 920, true);
-    cudaDeviceSynchronize();
-	cudaDevAssist(cudaMalloc((void**)&dev_pkey, 16*sizeof(uint8_t)), 317, true);
-	cudaDevAssist(cudaMalloc((void **)&dev_ek, 44*sizeof(uint32_t)), 932, true);
-	cudaDevAssist(cudaMemcpy(dev_pkey, &key, 16*sizeof(uint8_t), cudaMemcpyHostToDevice), 318, true);
-	cudaDeviceSynchronize();
+	cudaDevAssist(cudaMemcpyToSymbol(Nk, &Nk_h, sizeof(int), 0, cudaMemcpyHostToDevice), 535, true);
+	cudaDevAssist(cudaMemcpyToSymbol(Nr, &Nr_h, sizeof(int), 0, cudaMemcpyHostToDevice), 543, true);
+	cudaDevAssist(cudaMemcpyToSymbol(Nb, &Nb_h, sizeof(int), 0, cudaMemcpyHostToDevice), 903, true);
+	cudaDevAssist(cudaMemcpyToSymbol(s, &s_h, 256*sizeof(uint8_t), 0, cudaMemcpyHostToDevice), 920, true);
+	cudaDevAssist(cudaMemcpyToSymbol(ek, &ek_h, 44*sizeof(uint32_t), 0, cudaMemcpyHostToDevice), 823, true);
+	cudaThreadSynchronize();
 
-	K_Exp<<<1, 1>>>(dev_pkey, dev_ek);
+	const int BLOCKS = -1; //Not used
+	const int RUNNING_THREADS = 512;
 
-	cudaDeviceSynchronize();
-	cudaDevAssist(cudaMemcpy(&eK, dev_ek, 44*sizeof(uint32_t), cudaMemcpyDeviceToHost), 368, true);
-    cudaDeviceSynchronize();
-	cudaDevAssist(cudaMemcpyToSymbol(ek, &eK, 44*sizeof(uint32_t)), 823, true);
-
-	cudaDeviceSynchronize();
-	cudaFree(dev_ek);
-	cudaFree(dev_pkey);
+	uint8_t *devState = NULL;
+	cudaDevAssist(cudaMalloc((void**)&devState, RUNNING_THREADS*16*sizeof(uint8_t)), 425, true);
 
 	uint8_t states[RUNNING_THREADS][16] = { 0x00 };
-	struct ThreadControl tc[RUNNING_THREADS];
-	pthread_t thread[RUNNING_THREADS];
-	char ch = -1;
+  int ch = 0;
 	int spawn = 0;
 	int end = 1;
 	while (end)
@@ -364,36 +332,34 @@ int main(int argc, const char * argv[])
 		spawn = 0;
 		for (int i = 0; i < RUNNING_THREADS; i++) //Dispatch many control threads that will report back to main (for now 5x) - 1 worker per state
 		{
-			spawn++;
+            spawn++;
 			for (int ix = 0; ix < 16; ix++)
 			{
-				if (hexMode)
-				{
-					if (fscanf(infile, "%x", &states[i][ix]) != EOF) { ; }
-					else
-					{
-                        if (i == 0) { spawn = -1; }
-						else if (ix > 0) { for (int ixx = ix; ixx < 16; ixx++) { states[i][ixx] = 0x00; } }
-						else { spawn--; }
-						i = RUNNING_THREADS + 1;
-						end = 0;
-						break;
-					}
-				}
-				else
-				{
-					ch = getc(infile);
-					if (ch != EOF) { states[i][ix] = ch; }
-					else
-					{
-                        if (i == 0) { spawn = -1; }
-                        else if (ix > 0) { for (int ixx = ix; ixx < 16; ixx++) { states[i][ixx] = 0x00; } }
-						else { spawn--; }
-						i = RUNNING_THREADS + 1;
-						end = 0;
-						break;
-					}
-				}
+                if (hexMode)
+                {
+                    if (fscanf(infile, "%x", &states[i][ix]) != EOF) { ; }
+                    else
+                    {
+                        if (ix > 0) { for (int ixx = ix; ixx < 16; ixx++) { states[i][ixx] = 0x00; } }
+                        else { spawn--; }
+                        i = RUNNING_THREADS + 1;
+                        end = 0;
+                        break;
+                    }
+                }
+                else
+                {
+                    ch = getc(infile);
+                    if (ch != EOF) { states[i][ix] = ch; }
+                    else
+                    {
+                        if (ix > 0) { for (int ixx = ix; ixx < 16; ixx++) { states[i][ixx] = 0x00; } }
+                        else { spawn--; }
+                        i = RUNNING_THREADS + 1;
+                        end = 0;
+                        break;
+                    }
+                }
 			}
 		}
 		//arrange data correctly
@@ -419,16 +385,16 @@ int main(int argc, const char * argv[])
 			for (int c = 0; c < 16; c++) { memcpy(&states[i][c], &temp[c], sizeof(uint8_t)); }
 		}
 
-		//Set data for workers----------
-		for (int i = 0; i < spawn; i++)
-		{
-			tc[i].id = i;
-			for (int ip = 0; ip < 16; ip++) { tc[i].state[ip] = &states[i][ip]; }
-        }
-		//Spawn workers
-		for (int i = 0; i < spawn; i++) { pthread_create(&thread[i], NULL, mainCypher, &tc[i]); }
-		//Wait for workers
-		for (int i = 0; i < spawn; i++) { pthread_join(thread[i], NULL); }
+		//printf("\nCycle!: Spawn = %i", spawn);
+
+		cudaDevAssist(cudaMemcpy(devState, *states, spawn*16*sizeof(uint8_t), cudaMemcpyHostToDevice), 426, true);
+		cudaDevAssist(cudaDeviceSynchronize(), 268, true);
+		cudaRunner<<<1,spawn>>>(devState);
+
+		cudaDevAssist(cudaDeviceSynchronize(), 270, true);
+		cudaDevAssist(cudaMemcpy(*states, devState, spawn*16*sizeof(uint8_t), cudaMemcpyDeviceToHost), 431, true);
+
+
 		//Write results to out
 		for (int i = 0; i < spawn; i++)
 		{
@@ -446,9 +412,10 @@ int main(int argc, const char * argv[])
 			}
 		}
 	}
-	c_stop = clock();
-	float diff = (((float)c_stop - (float)c_start) / CLOCKS_PER_SEC ) * 1000;
-	printf("Done - Time taken: %f ms\n", diff);
+  c_stop = clock();
+  float diff = (((float)c_stop - (float)c_start) / CLOCKS_PER_SEC ) * 1000;
+  printf("Done - Time taken: %f ms\n", diff);
+	cudaFree(devState);
 	cudaDeviceReset();
 	fclose(infile);
 	fclose(outfile);

@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <pthread.h>
 #include <time.h>
 #include <string.h>
 
@@ -15,14 +14,6 @@
 const int Nb_h = 4;
 const int Nr_h = 14;
 const int Nk_h = 8;
-
-//const int RUNNING_THREADS = 5;
-//Change this variable to adjust the number of CUDA threads that run at the same time
-//Estimates (rough)
-//At 5 encrypting a book = 11 seconds
-//At 20 encrypting a book = 9.6 seconds
-//I have not tested above 20 but there is no reason it shouldn't work
-//Note: memory usage drasically increases with the number of threads
 
 const uint8_t s_h[256] = {
 		0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -60,11 +51,6 @@ uint8_t Rcon_h[256] = {
 		0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63,
 		0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd,
 		0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d
-};
-
-struct ThreadControl {
-	int id;
-	uint8_t* state[16];
 };
 
 __constant__ uint8_t s[256];
@@ -134,7 +120,7 @@ __device__ void mc(uint8_t* arr)
 
 __device__ void sr(uint8_t* arr)
 {
-	uint8_t out[33];
+	uint8_t out[16];
 	//On per-row basis (+1 shift ea row)
 	//Row 1
 	out[0] = arr[0];
@@ -271,8 +257,8 @@ int main(int argc, const char * argv[])
 {
 	printf("CasAES_CUDA Hyperthreaded AES-256 Encryption for CUDA processors - compiled 3/25/2015 Rev. 4\nCarter McCardwell, Northeastern University NUCAR - http://coe.neu.edu/~cmccardw - mccardwell.net\nPlease Wait...\n");
 
-    clock_t c_start, c_stop;
-    c_start = clock();
+  clock_t c_start, c_stop;
+  c_start = clock();
 
 	FILE *infile;
 	FILE *keyfile;
@@ -405,11 +391,11 @@ int main(int argc, const char * argv[])
 			}
 		}
 	}
-    c_stop = clock();
-    float diff = (((float)c_stop - (float)c_start) / CLOCKS_PER_SEC ) * 1000;
+  c_stop = clock();
+  float diff = (((float)c_stop - (float)c_start) / CLOCKS_PER_SEC ) * 1000;
 
-    printf("Done - Time taken: %f ms\n", diff);
-		cudaFree(devState);
+  printf("Done - Time taken: %f ms\n", diff);
+	cudaFree(devState);
 	cudaDeviceReset();
 	fclose(infile);
 	fclose(outfile);
